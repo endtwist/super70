@@ -1,6 +1,8 @@
 #
-# Originally written by Phil Burgess / Paint Your Dragon for Adafruit Industries.
+# Originally written by Phil Burgess / Paint Your Dragon
+# for Adafruit Industries.
 # BSD license, all text above must be included in any redistribution.
+# Original source (adafruit-pi-cam): Copyright (c) 2013, Adafruit Industries
 #
 
 import atexit
@@ -15,8 +17,14 @@ import pygame
 import stat
 import threading
 import time
+from Queue import Queue
 from pygame.locals import MOUSEBUTTONDOWN
-from subprocess import call
+from subprocess import run
+import RPi.GPIO as GPIO
+import logging
+
+
+logging.basicConfig(filename='cam.log', level=logging.DEBUG)
 
 
 # UI classes ---------------------------------------------------------------
@@ -141,11 +149,12 @@ def fxCallback(n):  # Pass 1 (next effect) or -1 (prev effect)
 
 def quitCallback():  # Quit confirmation button
     saveSettings()
+    GPIO.cleanup()
     raise SystemExit
 
 
 def viewCallback(n):  # Viewfinder buttons
-    global loadIdx, scaled, screenMode, screenModePrior, settingMode, storeMode
+    global loadIdx, scaled, screenMode, screenModePrior, settingMode
 
     if n is 0:   # Gear icon (settings)
         screenMode = settingMode  # Switch to last settings mode
@@ -155,7 +164,7 @@ def viewCallback(n):  # Viewfinder buttons
             screenMode = 0  # Image playback
             screenModePrior = -1  # Force screen refresh
         else:      # Load image
-            r = imgRange(pathData[storeMode])
+            r = imgRange(pathData)
             if r:
                 showImage(r[1])  # Show last image in directory
             else:
@@ -181,12 +190,12 @@ def imageCallback(n):  # Pass 1 (next image), -1 (prev image) or 0 (delete)
 
 
 def deleteCallback(n):  # Delete confirmation
-    global loadIdx, scaled, screenMode, storeMode
+    global loadIdx, scaled, screenMode
     screenMode = 0
     screenModePrior = -1
     if n is True:
-        os.remove(pathData[storeMode] + '/IMG_' + '%04d' % loadIdx + '.JPG')
-        if(imgRange(pathData[storeMode])):
+        os.remove(pathData + '/IMG_' + '%04d' % loadIdx + '.JPG')
+        if(imgRange(pathData)):
             screen.fill(0)
             pygame.display.update()
             showNextImage(-1)
@@ -202,7 +211,6 @@ def sizeModeCallback(n):  # Radio buttons on size settings screen
     sizeMode = n
     buttons[5][sizeMode + 3].setBg('radio3-1')
     camera.resolution = sizeData[sizeMode][1]
-#	camera.crop       = sizeData[sizeMode][2]
 
 
 # Global stuff -------------------------------------------------------------
@@ -210,8 +218,6 @@ def sizeModeCallback(n):  # Radio buttons on size settings screen
 screenMode = 3      # Current screen mode; default = viewfinder
 screenModePrior = -1      # Prior screen mode (for detecting changes)
 settingMode = 4      # Last-used settings mode (default = storage)
-storeMode = 0      # Storage mode; default = Photos folder
-storeModePrior = -1      # Prior storage mode (for detecting changes)
 sizeMode = 0      # Image size; default = Large
 fxMode = 0      # Image effect; default = Normal
 isoMode = 0      # ISO settingl default = Auto
@@ -223,7 +229,7 @@ scaled = None    # pygame Surface w/last-loaded image
 
 sizeData = [  # Camera parameters for different size settings
     # Full res      Viewfinder  Crop window
-    [(2592, 1944), (320, 240), (0.0, 0.0, 1.0, 1.0)],  # Large
+    [(3264, 2448), (640, 480), (0.0, 0.0, 1.0, 1.0)],  # Large
     [(1920, 1080), (320, 180), (0.1296, 0.2222, 0.7408, 0.5556)],  # Med
     [(1440, 1080), (320, 240), (0.2222, 0.2222, 0.5556, 0.5556)]]  # Small
 
@@ -243,7 +249,7 @@ fxData = [
     'negative', 'colorswap', 'posterise', 'denoise', 'blur', 'film',
     'washedout', 'emboss', 'cartoon', 'solarize']
 
-pathData = ['/media/sd-sda1/photos/']     # Path for storeMode = 0
+pathData = '/media/sd-sda1/photos/'
 
 icons = []  # This list gets populated at startup
 
@@ -277,10 +283,10 @@ buttons = [
         Button((0, 53, 320, 80), bg='empty')],     # 'Empty' message
 
     # Screen mode 3 is viewfinder / snapshot
-    [Button((0, 188, 156, 52), bg='gear', cb=viewCallback, value=0),
-        Button((164, 188, 156, 52), bg='play', cb=viewCallback, value=1),
+    [Button((0, 428, 156, 52), bg='gear', cb=viewCallback, value=0),
+        # Button((164, 188, 156, 52), bg='play', cb=viewCallback, value=1),
         Button((0,  0, 320, 240), cb=viewCallback, value=2),
-        Button((88, 51, 157, 102)),  # 'Working' label (when enabled)
+        Button((241, 189, 157, 102)),  # 'Working' label (when enabled)
         Button((148, 110, 22, 22))],  # Spinner (when enabled)
 
     # Remaining screens are settings modes
@@ -351,8 +357,7 @@ def saveSettings():
         # the number & order of things can change without breaking.
         d = {'fx': fxMode,
              'iso': isoMode,
-             'size': sizeMode,
-             'store': storeMode}
+             'size': sizeMode}
         pickle.dump(d, outfile)
         outfile.close()
     except:
@@ -370,8 +375,6 @@ def loadSettings():
             setIsoMode(d['iso'])
         if 'size' in d:
             sizeModeCallback(d['size'])
-        if 'store' in d:
-            storeModeCallback(d['store'])
     except:
         pass
 
@@ -420,14 +423,14 @@ def spinner():
 
 
 def takePicture():
-    global busy, gid, loadIdx, saveIdx, scaled, sizeMode, storeMode, storeModePrior, uid
+    global busy, gid, loadIdx, saveIdx, scaled, sizeMode, uid
 
-    if not os.path.isdir(pathData[storeMode]):
+    if not os.path.isdir(pathData):
         try:
-            os.makedirs(pathData[storeMode])
+            os.makedirs(pathData)
             # Set new directory ownership to pi user, mode to 755
-            os.chown(pathData[storeMode], uid, gid)
-            os.chmod(pathData[storeMode],
+            os.chown(pathData, uid, gid)
+            os.chmod(pathData,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR |
                      stat.S_IRGRP | stat.S_IXGRP |
                      stat.S_IROTH | stat.S_IXOTH)
@@ -438,19 +441,17 @@ def takePicture():
 
     # If this is the first time accessing this directory,
     # scan for the max image index, start at next pos.
-    if storeMode != storeModePrior:
-        r = imgRange(pathData[storeMode])
-        if r is None:
-            saveIdx = 1
-        else:
-            saveIdx = r[1] + 1
-            if saveIdx > 9999:
-                saveIdx = 0
-        storeModePrior = storeMode
+    r = imgRange(pathData)
+    if r is None:
+        saveIdx = 1
+    else:
+        saveIdx = r[1] + 1
+        if saveIdx > 9999:
+            saveIdx = 0
 
     # Scan for next available image slot
     while True:
-        filename = pathData[storeMode] + '/IMG_' + '%04d' % saveIdx + '.JPG'
+        filename = pathData + '/IMG_' + '%04d' % saveIdx + '.JPG'
         if not os.path.isfile(filename):
             break
         saveIdx += 1
@@ -462,6 +463,7 @@ def takePicture():
 
     scaled = None
     camera.resolution = sizeData[sizeMode][0]
+    camera.framerate_range = (0.1, 10)
     camera.crop = sizeData[sizeMode][2]
     try:
         camera.capture(filename, use_video_port=False, format='jpeg',
@@ -470,23 +472,36 @@ def takePicture():
         # os.chown(filename, uid, gid) # Not working, why?
         os.chmod(filename,
                  stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+
+        # Remove fisheye distortion
+        run([
+            'convert',
+            filename,
+            '-virtual-pixel gray',
+            '-distort barrel \'0 -0.065 -0.125 1.25\'',
+            '-crop 2900x2175+192+149',
+            '+repage',
+            filename
+        ])
+
         img = pygame.image.load(filename)
         scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
 
     finally:
         # Add error handling/indicator (disk full, etc.)
         camera.resolution = sizeData[sizeMode][1]
+        camera.framerate_range = (20, 60)
         camera.crop = (0.0, 0.0, 1.0, 1.0)
 
     busy = False
     t.join()
 
     if scaled:
-        if scaled.get_height() < 240:  # Letterbox
+        if scaled.get_height() < 480:  # Letterbox
             screen.fill(0)
         screen.blit(scaled,
-                    ((320 - scaled.get_width()) / 2,
-                     (240 - scaled.get_height()) / 2))
+                    ((640 - scaled.get_width()) / 2,
+                     (480 - scaled.get_height()) / 2))
         pygame.display.update()
         time.sleep(2.5)
         loadIdx = saveIdx
@@ -505,7 +520,7 @@ def showNextImage(direction):
             n = 0
         elif(n < 0):
             n = 9999
-        if os.path.exists(pathData[storeMode]+'/IMG_'+'%04d' % n+'.JPG'):
+        if os.path.exists(pathData+'/IMG_'+'%04d' % n+'.JPG'):
             showImage(n)
             break
 
@@ -514,13 +529,13 @@ def showNextImage(direction):
 
 
 def showImage(n):
-    global busy, loadIdx, scaled, screenMode, screenModePrior, sizeMode, storeMode
+    global busy, loadIdx, scaled, screenMode, screenModePrior, sizeMode
 
     t = threading.Thread(target=spinner)
     t.start()
 
     img = pygame.image.load(
-        pathData[storeMode] + '/IMG_' + '%04d' % n + '.JPG')
+        pathData + '/IMG_' + '%04d' % n + '.JPG')
     scaled = pygame.transform.scale(img, sizeData[sizeMode][1])
     loadIdx = n
 
@@ -535,9 +550,6 @@ def showImage(n):
 
 # Init framebuffer/touchscreen environment variables
 os.putenv('SDL_VIDEODRIVER', 'fbcon')
-#os.putenv('SDL_FBDEV'      , '/dev/fb1')
-#os.putenv('SDL_MOUSEDRV'   , 'TSLIB')
-#os.putenv('SDL_MOUSEDEV'   , '/dev/input/touchscreen')
 
 # Get user & group IDs for file & folder creation
 # (Want these to be 'pi' or other user, not root)
@@ -546,9 +558,8 @@ uid = int(s) if s else os.getuid()
 s = os.getenv("SUDO_GID")
 gid = int(s) if s else os.getgid()
 
-# Buffers for viewfinder data
+# Buffer for viewfinder data
 rgb = bytearray(640 * 480 * 3)
-# yuv = bytearray(320 * 240 * 3 / 2)
 
 # Init pygame and screen
 pygame.init()
@@ -559,9 +570,9 @@ screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 camera = picamera.PiCamera()
 atexit.register(camera.close)
 camera.resolution = sizeData[sizeMode][1]
-#camera.crop       = sizeData[sizeMode][2]
+camera.framerate_range = (20, 60)
 camera.crop = (0.0, 0.0, 1.0, 1.0)
-# Leave raw format at default YUV, don't touch, don't set to RGB!
+camera.vflip = True  # camera is mounted upside-down
 
 # Load all icons at startup.
 for file in os.listdir(iconPath):
@@ -582,10 +593,46 @@ for s in buttons:        # For each screenful of buttons...
 loadSettings()  # Must come last; fiddles with Button/Icon states
 
 
-# Main loop ----------------------------------------------------------------
+# Trigger (button) handler variables
+
+TRIGGER_PIN = 25
+trigger_state = 1
+last_trigger_time = 0
+
+
+# Photocell read variables
+
+PHOTOCELL_PIN = 18
+photocell_reading = 0
+photocell_last_read = 0
+
+
+# GPIO Events
+
+GPIO.setwarnings(False)  # Ignore warning for now
+GPIO.setmode(GPIO.BCM)  # Use physical pin numbering
+
+# Trigger
+GPIO.setup(TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.add_event_detect(TRIGGER_PIN, GPIO.BOTH, bouncetime=100)
+
+# Photocell
+photocellQ = Queue()
+
+
+def photocellWorker():
+    GPIO.setup(PHOTOCELL_PIN, GPIO.OUT)
+    GPIO.output(PHOTOCELL_PIN, GPIO.LOW)
+    time.sleep(0.1)
+    GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
+    while GPIO.input(PHOTOCELL_PIN) == GPIO.LOW:
+        photocellQ.put(True)
+    photocellQ.put(-1)
+
+
+# Main loop
 
 while(True):
-
     # Process touchscreen input
     while True:
         for event in pygame.event.get():
@@ -606,13 +653,13 @@ while(True):
         stream = io.BytesIO()  # Capture into in-memory stream
         camera.capture(stream, use_video_port=True, format='rgb')
         stream.seek(0)
-        stream.readinto(rgb)  # stream -> YUV buffer
+        stream.readinto(rgb)
         stream.close()
-        # yuv2rgb.convert(yuv, rgb, sizeData[sizeMode][1][0],
-        #  sizeData[sizeMode][1][1])
-        img = pygame.image.frombuffer(rgb[0:
-                                          (sizeData[sizeMode][1][0] * sizeData[sizeMode][1][1] * 3)],
-                                      sizeData[sizeMode][1], 'RGB')
+        img = pygame.image.frombuffer(
+            rgb[0:(sizeData[sizeMode][1][0] * sizeData[sizeMode][1][1] * 3)],
+            sizeData[sizeMode][1],
+            'RGB'
+        )
     elif screenMode < 2:  # Playback mode or delete confirmation
         img = scaled       # Show last-loaded image
     else:                # 'No Photos' mode
@@ -629,5 +676,27 @@ while(True):
     for i, b in enumerate(buttons[screenMode]):
         b.draw(screen)
     pygame.display.update()
+
+    if GPIO.event_detected(TRIGGER_PIN):
+        new_trigger_state = GPIO.input(TRIGGER_PIN)
+        now = time.time()
+        if trigger_state == 0 and \
+           new_trigger_state == 1 and \
+           now - last_trigger_time > 0.2:
+            logging.debug('Trigger up detected!')
+            takePicture()
+            last_trigger_time = time.time()
+        trigger_state = new_trigger_state
+
+    try:
+        pcv = photocellQ.get()
+        if pcv:
+            photocell_reading += 1
+        elif pcv == -1:
+            photocell_last_read = photocell_reading
+            photocell_reading = 0
+            logging.debug('Photocell reading: %d', photocell_last_read)
+    except Exception:
+        pass
 
     screenModePrior = screenMode
