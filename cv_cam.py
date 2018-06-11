@@ -9,12 +9,11 @@ import os
 import errno
 import stat
 import pygame
-import queue
-import threading
 import logging
 import numpy as np
 import RPi.GPIO as GPIO
 from pygame.locals import KEYDOWN
+from PIL import Image, ImageDraw, ImageFont
 
 PHOTO_WIDTH = 3264
 PHOTO_HEIGHT = 2448
@@ -42,19 +41,26 @@ GID = os.getgid()
 # Trigger (button) handler variables
 TRIGGER_PIN = 25
 trigger_state = 1
+trigger_start_time = 0
 last_trigger_time = 0
 
 # Photocell read variables
 PHOTOCELL_PIN = 18
-photocell_reading = 0
-photocell_last_read = 0
+photocell_read_start = 0
+photocell_history = []
+photocell_value = 0
+photocell_baseline = 0
 
 LOG_PATH = '%s/cam.log' % PHOTO_PATH
 try:
     os.remove(LOG_PATH)
 except:
     pass
-logging.basicConfig(filename=LOG_PATH, level=logging.DEBUG)
+logging.basicConfig(
+    filename=LOG_PATH,
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(message)s'
+)
 
 logging.debug('Camera booting...')
 
@@ -101,14 +107,14 @@ def capture_photo():
 
     camera.stop_preview()
 
+    # grab last frame from videoport?
+    # show 'waiting' state on pygame display
+
     stream = io.BytesIO()
     camera.resolution = PHOTO_SIZE
     camera.rotation = 180
     camera.capture(stream, 'jpeg')
     logging.debug('Photo captured!')
-
-    # grab last frame from videoport?
-    # show 'waiting' state on pygame display
 
     data = np.fromstring(stream.getvalue(), dtype=np.uint8)
     image = cv2.imdecode(data, 1)
@@ -154,6 +160,41 @@ def capture_photo():
     camera.start_preview()
 
 
+DEJA_VU_SANS = ImageFont.truetype('/usr/share/fonts/dejavu/DejaVuSans.ttf', 40)
+
+focus_ring = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+draw = ImageDraw.Draw(focus_ring)
+draw.ellipse((
+    (SCREEN_WIDTH / 2) - 50,
+    (SCREEN_HEIGHT / 2) - 50,
+    (SCREEN_WIDTH / 2) + 50,
+    (SCREEN_HEIGHT / 2) + 50,
+), outline=(255, 255, 255, 50))
+focus_ring_overlay = camera.add_overlay(
+    focus_ring.tobytes(),
+    size=SCREEN_SIZE,
+    layer=3
+)
+
+focus_ring_filled = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+draw = ImageDraw.Draw(focus_ring_filled)
+draw.ellipse((
+    (SCREEN_WIDTH / 2) - 50,
+    (SCREEN_HEIGHT / 2) - 50,
+    (SCREEN_WIDTH / 2) + 50,
+    (SCREEN_HEIGHT / 2) + 50,
+), fill=(255, 255, 255, 50))
+
+exposure = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+draw = ImageDraw.Draw(exposure)
+draw.text((10, 10), '±0', font=DEJA_VU_SANS, fill=(255, 255, 255, 128))
+exposure_overlay = camera.add_overlay(
+    exposure.tobytes(),
+    size=SCREEN_SIZE,
+    layer=3
+)
+last_exposure_overlay = time.time()
+
 GPIO.setwarnings(False)  # Ignore warning for now
 GPIO.setmode(GPIO.BCM)  # Use physical pin numbering
 
@@ -162,21 +203,12 @@ GPIO.setup(TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.add_event_detect(TRIGGER_PIN, GPIO.BOTH, bouncetime=100)
 
 # Photocell
-photocell_q = queue.Queue()
-
-
-def photocell_worker():
-    GPIO.setup(PHOTOCELL_PIN, GPIO.OUT)
-    GPIO.output(PHOTOCELL_PIN, GPIO.LOW)
-    time.sleep(0.1)
-    GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
-    while GPIO.input(PHOTOCELL_PIN) == GPIO.LOW:
-        photocell_q.put(True)
-    photocell_q.put(-1)
-
-
-photocell = threading.Thread(target=photocell_worker)
-photocell.start()
+GPIO.setup(PHOTOCELL_PIN, GPIO.OUT)
+GPIO.output(PHOTOCELL_PIN, GPIO.LOW)
+time.sleep(0.1)
+photocell_read_start = time.time()
+GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
+GPIO.add_event_detect(PHOTOCELL_PIN, GPIO.RISING)
 
 try:
     # Wait indefinitely until the user terminates the script
@@ -190,29 +222,65 @@ try:
                 raise KeyboardInterrupt
 
         if GPIO.event_detected(TRIGGER_PIN):
-            new_trigger_state = GPIO.input(TRIGGER_PIN)
             now = time.time()
-            if trigger_state == 0 and \
-               new_trigger_state == 1 and \
-               now - last_trigger_time > 0.2:
+            new_trigger_state = GPIO.input(TRIGGER_PIN)
+            if trigger_state == 1 and new_trigger_state == 0:
+                trigger_start_time = now
+            elif trigger_state == 0 and new_trigger_state == 1 and \
+                    now - last_trigger_time > 0.2:
                 logging.debug('Trigger up detected!')
-                capture_photo()
+                if now - trigger_start_time >= 2:
+                    # re-adjust photocell baseline
+                    photocell_baseline = photocell_value
+                    logging.debug('New photocell baseline: %d', photocell_value)
+                    focus_ring_overlay.update(focus_ring_filled.tobytes())
+                    time.sleep(0.25)
+                    focus_ring_overlay.update(focus_ring.tobytes())
+                else:
+                    capture_photo()
                 last_trigger_time = time.time()
             trigger_state = new_trigger_state
 
-        try:
-            pcv = photocell_q.get_nowait()
-            if pcv:
-                photocell_reading += 1
-            elif pcv == -1:
-                photocell_last_read = photocell_reading
-                photocell_reading = 0
-                logging.debug('Photocell reading: %d', photocell_last_read)
-                exposure_adjust = (
-                    max(200, min(1000, photocell_last_read)) - 200
-                ) / 800
-                camera.exposure_compensation = (exposure_adjust * 50) - 25
-        except queue.Empty:
-            continue
+        if GPIO.event_detected(PHOTOCELL_PIN) and \
+           GPIO.input(PHOTOCELL_PIN) == 1:
+            photocell_history.append(time.time() - photocell_read_start)
+            if len(photocell_history) > 3:
+                photocell_history = photocell_history[1:]
+            photocell_value = np.mean(photocell_history)
+            if photocell_baseline == 0:
+                photocell_baseline = photocell_value
+
+            logging.debug('Photocell reading: %d', photocell_value)
+
+            GPIO.remove_event_detect(PHOTOCELL_PIN)
+            GPIO.setup(PHOTOCELL_PIN, GPIO.OUT)
+            GPIO.output(PHOTOCELL_PIN, GPIO.LOW)
+            time.sleep(0.1)
+            photocell_read_start = time.time()
+            GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
+            GPIO.add_event_detect(PHOTOCELL_PIN, GPIO.RISING)
+
+            exposure_adjust = min(
+                1, max(-1, (photocell_value - photocell_baseline) / 0.025)
+            )
+            exposure_compensation = int(exposure_adjust * 25)
+            camera.exposure_compensation = exposure_compensation
+
+            if time.time() - last_exposure_overlay >= 3:
+                exposure = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+                draw = ImageDraw.Draw(exposure)
+                draw.text(
+                    (10, 10),
+                    '%d' % exposure_compensation,
+                    font=DEJA_VU_SANS,
+                    fill=(255, 255, 255, 128)
+                )
+                camera.remove_overlay(exposure_overlay)
+                exposure_overlay = camera.add_overlay(
+                    exposure.tobytes(),
+                    size=SCREEN_SIZE,
+                    layer=3
+                )
+                last_exposure_overlay = time.time()
 except (KeyboardInterrupt, SystemExit):
     sys.exit(0)
