@@ -15,10 +15,12 @@ import RPi.GPIO as GPIO
 from pygame.locals import KEYDOWN
 from PIL import Image, ImageDraw, ImageFont
 
+# For capture
 PHOTO_WIDTH = 3264
 PHOTO_HEIGHT = 2448
 PHOTO_SIZE = (PHOTO_WIDTH, PHOTO_HEIGHT)
 
+# For on-screen preview
 SCREEN_WIDTH = 640
 SCREEN_HEIGHT = 480
 SCREEN_SIZE = (SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -30,6 +32,7 @@ camera.framerate = 24
 camera.start_preview()
 logging.debug('Preview started!')
 
+# Pre-generated de-fisheye OpenCV remap calibration variables
 pkl_file = open('remap.pkl', 'rb')
 remap = pickle.load(pkl_file)
 pkl_file.close()
@@ -64,6 +67,10 @@ logging.basicConfig(
 
 logging.debug('Camera booting...')
 
+# Fun trick: picamera's preview will actually render *above* pygame meaning
+# we can use both at the same time pretty easily. When we want to show the
+# pygame window (e.g., for post-capture review), we just stop the picamera
+# preview briefly.
 pygame.init()
 
 screen = pygame.display.set_mode(SCREEN_SIZE)
@@ -109,6 +116,7 @@ def capture_photo():
 
     # grab last frame from videoport?
     # show 'waiting' state on pygame display
+    # TODO: May need to sleep a sec to give the pi time to close the preview
 
     stream = io.BytesIO()
     camera.resolution = PHOTO_SIZE
@@ -160,7 +168,7 @@ def capture_photo():
     camera.start_preview()
 
 
-DEJA_VU_SANS = ImageFont.truetype('/usr/share/fonts/dejavu/DejaVuSans.ttf', 40)
+DEJA_VU_SANS_MONO = ImageFont.truetype('/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf', 24)
 
 focus_ring = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
 draw = ImageDraw.Draw(focus_ring)
@@ -185,13 +193,24 @@ draw.ellipse((
     (SCREEN_HEIGHT / 2) + 50,
 ), fill=(255, 255, 255, 50))
 
-exposure = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
-draw = ImageDraw.Draw(exposure)
-draw.text((10, 10), '±0', font=DEJA_VU_SANS, fill=(255, 255, 255, 128))
+exposure_default = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+draw = ImageDraw.Draw(exposure_default)
+text = '±0'
+textwidth, textheight = draw.textsize(text, DEJA_VU_SANS_MONO)
+draw.text(
+    (
+        SCREEN_WIDTH - textwidth - 10,
+        SCREEN_HEIGHT - textheight - 10
+    ),
+    text,
+    font=DEJA_VU_SANS_MONO,
+    fill=(255, 255, 255, 128)
+)
 exposure_overlay = camera.add_overlay(
-    exposure.tobytes(),
+    exposure_default.tobytes(),
     size=SCREEN_SIZE,
-    layer=3
+    layer=3,
+    rotation=180
 )
 last_exposure_overlay = time.time()
 
@@ -225,24 +244,42 @@ try:
             now = time.time()
             new_trigger_state = GPIO.input(TRIGGER_PIN)
             if trigger_state == 1 and new_trigger_state == 0:
+                # shutter button went from unpressed to pressed
                 trigger_start_time = now
             elif trigger_state == 0 and new_trigger_state == 1 and \
                     now - last_trigger_time > 0.2:
+                # shutter button went from pressed to unpressed (trigger time
+                # detection here is used as a bit of debounce)
                 logging.debug('Trigger up detected!')
                 if now - trigger_start_time >= 2:
-                    # re-adjust photocell baseline
+                    # if it's been held for 2s+, re-adjust photocell baseline
                     photocell_baseline = photocell_value
                     logging.debug('New photocell baseline: %d', photocell_value)
                     focus_ring_overlay.update(focus_ring_filled.tobytes())
+                    camera.remove_overlay(exposure_overlay)
+                    exposure_overlay = camera.add_overlay(
+                        exposure_default.tobytes(),
+                        size=SCREEN_SIZE,
+                        layer=3,
+                        rotation=180
+                    )
                     time.sleep(0.25)
                     focus_ring_overlay.update(focus_ring.tobytes())
                 else:
+                    # otherwise just take the photo
                     capture_photo()
                 last_trigger_time = time.time()
             trigger_state = new_trigger_state
 
         if GPIO.event_detected(PHOTOCELL_PIN) and \
            GPIO.input(PHOTOCELL_PIN) == 1:
+            # A side note here: because the pi0 is single-core single-thread,
+            # we don't get the benefit of being able to run a photocell counter
+            # in another thread. Instead, we just wait for the GPIO library
+            # to trigger an event when the pin goes high, and then we check
+            # the timing since we last set the pin low.
+
+            # some light smoothing of the photocell reading
             photocell_history.append(time.time() - photocell_read_start)
             if len(photocell_history) > 3:
                 photocell_history = photocell_history[1:]
@@ -260,26 +297,39 @@ try:
             GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
             GPIO.add_event_detect(PHOTOCELL_PIN, GPIO.RISING)
 
+            # The dividend here is the total timing range we see on the
+            # photoresistor when rolling the exposure wheel from one
+            # end to the other.
             exposure_adjust = min(
                 1, max(-1, (photocell_value - photocell_baseline) / 0.025)
             )
             exposure_compensation = int(exposure_adjust * 25)
             camera.exposure_compensation = exposure_compensation
 
+            # Updating the overlay too often causes memory issues with MMAL,
+            # as does using the ".update" method offered by picamera's
+            # PiOverlayRenderer class. So, instead, we update every ~3s by
+            # removing and creating a new overlay.
             if time.time() - last_exposure_overlay >= 3:
                 exposure = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
                 draw = ImageDraw.Draw(exposure)
+                text = '%d' % exposure_compensation
+                textwidth, textheight = draw.textsize(text, DEJA_VU_SANS_MONO)
                 draw.text(
-                    (10, 10),
-                    '%d' % exposure_compensation,
-                    font=DEJA_VU_SANS,
+                    (
+                        SCREEN_WIDTH - textwidth - 10,
+                        SCREEN_HEIGHT - textheight - 10
+                    ),
+                    text,
+                    font=DEJA_VU_SANS_MONO,
                     fill=(255, 255, 255, 128)
                 )
                 camera.remove_overlay(exposure_overlay)
                 exposure_overlay = camera.add_overlay(
                     exposure.tobytes(),
                     size=SCREEN_SIZE,
-                    layer=3
+                    layer=3,
+                    rotation=180
                 )
                 last_exposure_overlay = time.time()
 except (KeyboardInterrupt, SystemExit):
