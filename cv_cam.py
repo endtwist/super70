@@ -168,6 +168,42 @@ def capture_photo():
     camera.start_preview()
 
 
+def draw_overlay(exposure_comp, exposure_speed, iso):
+    global SCREEN_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT, DEJA_VU_SANS_MONO
+
+    overlay = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    exposure_comp = str(exposure_comp)
+    textwidth, textheight = draw.textsize(exposure_comp, DEJA_VU_SANS_MONO)
+    draw.text(
+        (SCREEN_WIDTH - textwidth - 10, SCREEN_HEIGHT - textheight - 10),
+        exposure_comp,
+        font=DEJA_VU_SANS_MONO,
+        fill=(255, 255, 255, 128)
+    )
+
+    exposure_speed = str(exposure_speed)
+    textwidth, textheight = draw.textsize(exposure_speed, DEJA_VU_SANS_MONO)
+    draw.text(
+        (10, SCREEN_HEIGHT - textheight - 10),
+        exposure_speed,
+        font=DEJA_VU_SANS_MONO,
+        fill=(255, 255, 255, 128)
+    )
+
+    iso = str(iso)
+    textwidth, textheight = draw.textsize(iso, DEJA_VU_SANS_MONO)
+    draw.text(
+        (10, 10),
+        iso,
+        font=DEJA_VU_SANS_MONO,
+        fill=(255, 255, 255, 128)
+    )
+
+    return overlay.tobytes()
+
+
 DEJA_VU_SANS_MONO = ImageFont.truetype('/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf', 24)
 
 focus_ring = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
@@ -178,8 +214,9 @@ draw.ellipse((
     (SCREEN_WIDTH / 2) + 50,
     (SCREEN_HEIGHT / 2) + 50,
 ), outline=(255, 255, 255, 50))
+focus_ring = focus_ring.tobytes()
 focus_ring_overlay = camera.add_overlay(
-    focus_ring.tobytes(),
+    focus_ring,
     size=SCREEN_SIZE,
     layer=3
 )
@@ -192,27 +229,16 @@ draw.ellipse((
     (SCREEN_WIDTH / 2) + 50,
     (SCREEN_HEIGHT / 2) + 50,
 ), fill=(255, 255, 255, 50))
+focus_ring_filled = focus_ring_filled.tobytes()
 
-exposure_default = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
-draw = ImageDraw.Draw(exposure_default)
-text = '±0'
-textwidth, textheight = draw.textsize(text, DEJA_VU_SANS_MONO)
-draw.text(
-    (
-        SCREEN_WIDTH - textwidth - 10,
-        SCREEN_HEIGHT - textheight - 10
-    ),
-    text,
-    font=DEJA_VU_SANS_MONO,
-    fill=(255, 255, 255, 128)
-)
-exposure_overlay = camera.add_overlay(
-    exposure_default.tobytes(),
+default_status_overlay = draw_overlay('±0', '', '')
+status_overlay = camera.add_overlay(
+    default_status_overlay,
     size=SCREEN_SIZE,
     layer=3,
     rotation=180
 )
-last_exposure_overlay = time.time()
+last_status_overlay = time.time()
 
 GPIO.setwarnings(False)  # Ignore warning for now
 GPIO.setmode(GPIO.BCM)  # Use physical pin numbering
@@ -255,16 +281,16 @@ try:
                     # if it's been held for 2s+, re-adjust photocell baseline
                     photocell_baseline = photocell_value
                     logging.debug('New photocell baseline: %d', photocell_value)
-                    focus_ring_overlay.update(focus_ring_filled.tobytes())
-                    camera.remove_overlay(exposure_overlay)
-                    exposure_overlay = camera.add_overlay(
-                        exposure_default.tobytes(),
+                    focus_ring_overlay.update(focus_ring_filled)
+                    camera.remove_overlay(status_overlay)
+                    status_overlay = camera.add_overlay(
+                        default_status_overlay,
                         size=SCREEN_SIZE,
                         layer=3,
                         rotation=180
                     )
                     time.sleep(0.25)
-                    focus_ring_overlay.update(focus_ring.tobytes())
+                    focus_ring_overlay.update(focus_ring)
                 else:
                     # otherwise just take the photo
                     capture_photo()
@@ -310,27 +336,18 @@ try:
             # as does using the ".update" method offered by picamera's
             # PiOverlayRenderer class. So, instead, we update every ~3s by
             # removing and creating a new overlay.
-            if time.time() - last_exposure_overlay >= 3:
-                exposure = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
-                draw = ImageDraw.Draw(exposure)
-                text = '%d' % exposure_compensation
-                textwidth, textheight = draw.textsize(text, DEJA_VU_SANS_MONO)
-                draw.text(
-                    (
-                        SCREEN_WIDTH - textwidth - 10,
-                        SCREEN_HEIGHT - textheight - 10
+            if time.time() - last_status_overlay >= 3:
+                camera.remove_overlay(status_overlay)
+                status_overlay = camera.add_overlay(
+                    draw_overlay(
+                        exposure_compensation,
+                        camera.exposure_speed,
+                        camera.iso
                     ),
-                    text,
-                    font=DEJA_VU_SANS_MONO,
-                    fill=(255, 255, 255, 128)
-                )
-                camera.remove_overlay(exposure_overlay)
-                exposure_overlay = camera.add_overlay(
-                    exposure.tobytes(),
                     size=SCREEN_SIZE,
                     layer=3,
                     rotation=180
                 )
-                last_exposure_overlay = time.time()
+                last_status_overlay = time.time()
 except (KeyboardInterrupt, SystemExit):
     sys.exit(0)
