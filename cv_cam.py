@@ -29,6 +29,7 @@ SCREEN_SIZE = (SCREEN_WIDTH, SCREEN_HEIGHT)
 camera = PiCamera()
 camera.resolution = SCREEN_SIZE  # change this right before taking a photo
 camera.framerate = 24
+camera.iso = 150
 camera.start_preview()
 logging.debug('Preview started!')
 
@@ -60,10 +61,14 @@ try:
 except:
     pass
 logging.basicConfig(
-    filename=LOG_PATH,
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
+file_log = logging.FileHandler(filename=LOG_PATH, mode='w')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_log.setLevel(logging.DEBUG)
+file_log.setFormatter(formatter)
+logging.getLogger('').addHandler(file_log)
 
 logging.debug('Camera booting...')
 
@@ -92,6 +97,25 @@ if not os.path.isdir(PHOTO_PATH):
         # errno = 2 if can't create folder
         print(errno.errorcode[e.errno])
         # show an error on screen
+
+
+# from https://gist.github.com/bhawkins/3535131
+def medfilt(x, k):
+    """Apply a length-k median filter to a 1D array x.
+    Boundaries are extended by repeating endpoints.
+    """
+    assert k % 2 == 1, "Median filter length must be odd."
+    assert x.ndim == 1, "Input must be one-dimensional."
+    k2 = (k - 1) // 2
+    y = np.zeros((len(x), k), dtype=x.dtype)
+    y[:, k2] = x
+    for i in range(k2):
+        j = k2 - i
+        y[j:, i] = x[:-j]
+        y[:j, i] = x[0]
+        y[:-j, -(i+1)] = x[j:]
+        y[-j:, -(i+1)] = x[-1]
+    return np.median(y, axis=1)
 
 
 def img_range(path):
@@ -168,35 +192,17 @@ def capture_photo():
     camera.start_preview()
 
 
-def draw_overlay(exposure_comp, exposure_speed, iso):
+def draw_overlay(shutter_speed):
     global SCREEN_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT, DEJA_VU_SANS_MONO
 
     overlay = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    exposure_comp = str(exposure_comp)
-    textwidth, textheight = draw.textsize(exposure_comp, DEJA_VU_SANS_MONO)
-    draw.text(
-        (SCREEN_WIDTH - textwidth - 10, SCREEN_HEIGHT - textheight - 10),
-        exposure_comp,
-        font=DEJA_VU_SANS_MONO,
-        fill=(255, 255, 255, 128)
-    )
-
-    exposure_speed = str(exposure_speed)
-    textwidth, textheight = draw.textsize(exposure_speed, DEJA_VU_SANS_MONO)
+    shutter_speed = str(shutter_speed)
+    textwidth, textheight = draw.textsize(shutter_speed, DEJA_VU_SANS_MONO)
     draw.text(
         (10, SCREEN_HEIGHT - textheight - 10),
-        exposure_speed,
-        font=DEJA_VU_SANS_MONO,
-        fill=(255, 255, 255, 128)
-    )
-
-    iso = str(iso)
-    textwidth, textheight = draw.textsize(iso, DEJA_VU_SANS_MONO)
-    draw.text(
-        (10, 10),
-        iso,
+        shutter_speed,
         font=DEJA_VU_SANS_MONO,
         fill=(255, 255, 255, 128)
     )
@@ -231,7 +237,7 @@ draw.ellipse((
 ), fill=(255, 255, 255, 50))
 focus_ring_filled = focus_ring_filled.tobytes()
 
-default_status_overlay = draw_overlay('±0', '', '')
+default_status_overlay = draw_overlay('±0')
 status_overlay = camera.add_overlay(
     default_status_overlay,
     size=SCREEN_SIZE,
@@ -277,23 +283,7 @@ try:
                 # shutter button went from pressed to unpressed (trigger time
                 # detection here is used as a bit of debounce)
                 logging.debug('Trigger up detected!')
-                if now - trigger_start_time >= 2:
-                    # if it's been held for 2s+, re-adjust photocell baseline
-                    photocell_baseline = photocell_value
-                    logging.debug('New photocell baseline: %d', photocell_value)
-                    focus_ring_overlay.update(focus_ring_filled)
-                    camera.remove_overlay(status_overlay)
-                    status_overlay = camera.add_overlay(
-                        default_status_overlay,
-                        size=SCREEN_SIZE,
-                        layer=3,
-                        rotation=180
-                    )
-                    time.sleep(0.25)
-                    focus_ring_overlay.update(focus_ring)
-                else:
-                    # otherwise just take the photo
-                    capture_photo()
+                capture_photo()
                 last_trigger_time = time.time()
             trigger_state = new_trigger_state
 
@@ -304,18 +294,45 @@ try:
             # in another thread. Instead, we just wait for the GPIO library
             # to trigger an event when the pin goes high, and then we check
             # the timing since we last set the pin low.
+            GPIO.remove_event_detect(PHOTOCELL_PIN)
 
             # some light smoothing of the photocell reading
-            photocell_history.append(time.time() - photocell_read_start)
-            if len(photocell_history) > 3:
+            photocell_reading = (time.time() - photocell_read_start) * 1000
+            photocell_history.append(photocell_reading)
+            if len(photocell_history) > 11:
                 photocell_history = photocell_history[1:]
-            photocell_value = np.mean(photocell_history)
-            if photocell_baseline == 0:
-                photocell_baseline = photocell_value
 
-            logging.debug('Photocell reading: %d', photocell_value)
+            if len(photocell_history) > 5:
+                photocell_history = medfilt(np.array(photocell_history), 5)
 
-            GPIO.remove_event_detect(PHOTOCELL_PIN)
+                # Second-to-last value in the median-filtered history
+                # is the most 'stable'
+                photocell_value = photocell_history.tolist()[-2]
+
+                logging.debug('Photocell reading: %d', photocell_value)
+
+                # The dividend here is the total timing range we see on the
+                # photoresistor when rolling the exposure wheel from one
+                # end to the other.
+                light_reading = (photocell_value - 20) / (300 - 20)
+                # 1/500 second -> 1 second
+                shutter_speed = 2000 + (light_reading * 1000000)
+                camera.shutter_speed = int(shutter_speed)
+
+                # Updating the overlay too often causes memory issues with MMAL
+                # as does using the ".update" method offered by picamera's
+                # PiOverlayRenderer class. So, instead, we update every ~3s by
+                # removing and creating a new overlay.
+                if time.time() - last_status_overlay >= 3:
+                    camera.remove_overlay(status_overlay)
+                    status_overlay = camera.add_overlay(
+                        draw_overlay(shutter_speed),
+                        size=SCREEN_SIZE,
+                        layer=3,
+                        rotation=180
+                    )
+                    last_status_overlay = time.time()
+
             GPIO.setup(PHOTOCELL_PIN, GPIO.OUT)
             GPIO.output(PHOTOCELL_PIN, GPIO.LOW)
             time.sleep(0.1)
@@ -323,31 +340,5 @@ try:
             GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
             GPIO.add_event_detect(PHOTOCELL_PIN, GPIO.RISING)
 
-            # The dividend here is the total timing range we see on the
-            # photoresistor when rolling the exposure wheel from one
-            # end to the other.
-            exposure_adjust = min(
-                1, max(-1, (photocell_value - photocell_baseline) / 0.025)
-            )
-            exposure_compensation = int(exposure_adjust * 25)
-            camera.exposure_compensation = exposure_compensation
-
-            # Updating the overlay too often causes memory issues with MMAL,
-            # as does using the ".update" method offered by picamera's
-            # PiOverlayRenderer class. So, instead, we update every ~3s by
-            # removing and creating a new overlay.
-            if time.time() - last_status_overlay >= 3:
-                camera.remove_overlay(status_overlay)
-                status_overlay = camera.add_overlay(
-                    draw_overlay(
-                        exposure_compensation,
-                        camera.exposure_speed,
-                        camera.iso
-                    ),
-                    size=SCREEN_SIZE,
-                    layer=3,
-                    rotation=180
-                )
-                last_status_overlay = time.time()
 except (KeyboardInterrupt, SystemExit):
     sys.exit(0)
