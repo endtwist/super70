@@ -51,14 +51,14 @@ last_trigger_time = 0
 # Photocell read variables
 PHOTOCELL_PIN = 18
 photocell_read_start = 0
-photocell_history = []
+photocell_hist = []
 photocell_value = 0
 photocell_baseline = 0
 
 LOG_PATH = '%s/cam.log' % PHOTO_PATH
 try:
     os.remove(LOG_PATH)
-except:
+except Exception:
     pass
 logging.basicConfig(
     level=logging.DEBUG,
@@ -133,14 +133,23 @@ def img_range(path):
         return None if min > max else (min, max)
 
 
+def free_space(path):
+    statvfs = os.statvfs(path)
+    avail_mbytes = (statvfs.f_frsize * statvfs.f_bavail) / (1024 * 1024)
+    if avail_mbytes < 1024:
+        return '%d MB' % ()
+    else:
+        return '%.1f GB' % (avail_mbytes / 1024)  # return gigabytes
+
+
 def capture_photo():
     global camera, PHOTO_PATH, PHOTO_SIZE
 
     camera.stop_preview()
 
+    time.sleep(0.1)
     # grab last frame from videoport?
     # show 'waiting' state on pygame display
-    # TODO: May need to sleep a sec to give the pi time to close the preview
 
     stream = io.BytesIO()
     camera.resolution = PHOTO_SIZE
@@ -180,7 +189,8 @@ def capture_photo():
 
     # show final image before restarting the preview (converts BGR to RGB)
     scaled = cv2.resize(image, SCREEN_SIZE)
-    scaled = cv2.transpose(scaled[..., ::-1])
+    scaled = cv2.transpose(scaled[..., ::-1])  # BGR to RGB
+    scaled = cv2.flip(scaled, -1)  # Rotate 180 degrees
     frame = pygame.surfarray.make_surface(scaled)
     screen.blit(frame, (0, 0))
     pygame.display.update()
@@ -193,12 +203,14 @@ def capture_photo():
 
 
 def draw_overlay(shutter_speed):
-    global SCREEN_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT, DEJA_VU_SANS_MONO
+    global SCREEN_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT, \
+           DEJA_VU_SANS_MONO, PHOTO_PATH
 
     overlay = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    shutter_speed = str(shutter_speed)
+    # shutter_speed is microseconds, we convert to milliseconds for rendering
+    shutter_speed = '%d ms' % round(shutter_speed / 1000)
     textwidth, textheight = draw.textsize(shutter_speed, DEJA_VU_SANS_MONO)
     draw.text(
         (10, SCREEN_HEIGHT - textheight - 10),
@@ -207,10 +219,20 @@ def draw_overlay(shutter_speed):
         fill=(255, 255, 255, 128)
     )
 
+    disk_space = free_space(PHOTO_PATH)
+    textwidth, textheight = draw.textsize(disk_space, DEJA_VU_SANS_MONO)
+    draw.text(
+        (SCREEN_WIDTH - textwidth - 10, SCREEN_HEIGHT - textheight - 10),
+        disk_space,
+        font=DEJA_VU_SANS_MONO,
+        fill=(255, 255, 255, 128)
+    )
+
     return overlay.tobytes()
 
 
-DEJA_VU_SANS_MONO = ImageFont.truetype('/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf', 24)
+DEJA_VU_SANS_MONO = ImageFont.truetype(
+    '/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf', 24)
 
 focus_ring = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
 draw = ImageDraw.Draw(focus_ring)
@@ -226,16 +248,6 @@ focus_ring_overlay = camera.add_overlay(
     size=SCREEN_SIZE,
     layer=3
 )
-
-focus_ring_filled = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
-draw = ImageDraw.Draw(focus_ring_filled)
-draw.ellipse((
-    (SCREEN_WIDTH / 2) - 50,
-    (SCREEN_HEIGHT / 2) - 50,
-    (SCREEN_WIDTH / 2) + 50,
-    (SCREEN_HEIGHT / 2) + 50,
-), fill=(255, 255, 255, 50))
-focus_ring_filled = focus_ring_filled.tobytes()
 
 default_status_overlay = draw_overlay('±0')
 status_overlay = camera.add_overlay(
@@ -298,26 +310,25 @@ try:
 
             # some light smoothing of the photocell reading
             photocell_reading = (time.time() - photocell_read_start) * 1000
-            photocell_history.append(photocell_reading)
-            if len(photocell_history) > 11:
-                photocell_history = photocell_history[1:]
+            photocell_hist.append(photocell_reading)
+            if len(photocell_hist) > 11:
+                photocell_hist = photocell_hist[1:]
 
-            if len(photocell_history) > 5:
-                photocell_history = medfilt(np.array(photocell_history), 5)
+            if len(photocell_hist) > 5:
+                photocell_hist = medfilt(np.array(photocell_hist), 5).tolist()
 
                 # Second-to-last value in the median-filtered history
                 # is the most 'stable'
-                photocell_value = photocell_history.tolist()[-2]
+                photocell_value = photocell_hist[-2]
 
                 logging.debug('Photocell reading: %d', photocell_value)
 
                 # The dividend here is the total timing range we see on the
-                # photoresistor when rolling the exposure wheel from one
-                # end to the other.
+                # photoresistor between darkest and lightest environments.
                 light_reading = (photocell_value - 20) / (300 - 20)
-                # 1/500 second -> 1 second
-                shutter_speed = 2000 + (light_reading * 1000000)
-                camera.shutter_speed = int(shutter_speed)
+                # 1/500 second -> 1.25 seconds
+                shutter_speed = int(2000 + (light_reading * 1250000))
+                camera.shutter_speed = shutter_speed
 
                 # Updating the overlay too often causes memory issues with MMAL
                 # as does using the ".update" method offered by picamera's
