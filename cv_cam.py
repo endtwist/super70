@@ -81,7 +81,7 @@ pygame.init()
 screen = pygame.display.set_mode(SCREEN_SIZE)
 pygame.mouse.set_visible(False)
 
-# allow the camera to warmup
+# allow the camera to warm up
 time.sleep(0.1)
 
 if not os.path.isdir(PHOTO_PATH):
@@ -96,7 +96,6 @@ if not os.path.isdir(PHOTO_PATH):
     except OSError as e:
         # errno = 2 if can't create folder
         print(errno.errorcode[e.errno])
-        # show an error on screen
 
 
 # from https://gist.github.com/bhawkins/3535131
@@ -216,7 +215,7 @@ def draw_overlay(shutter_speed):
         (10, SCREEN_HEIGHT - textheight - 10),
         shutter_speed,
         font=DEJA_VU_SANS_MONO,
-        fill=(255, 255, 255, 128)
+        fill=(255, 255, 255)
     )
 
     disk_space = free_space(PHOTO_PATH)
@@ -225,7 +224,7 @@ def draw_overlay(shutter_speed):
         (SCREEN_WIDTH - textwidth - 10, SCREEN_HEIGHT - textheight - 10),
         disk_space,
         font=DEJA_VU_SANS_MONO,
-        fill=(255, 255, 255, 128)
+        fill=(255, 255, 255)
     )
 
     return overlay.tobytes()
@@ -234,17 +233,21 @@ def draw_overlay(shutter_speed):
 DEJA_VU_SANS_MONO = ImageFont.truetype(
     '/usr/share/fonts/dejavu/DejaVuSansMono-Bold.ttf', 24)
 
-focus_ring = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
-draw = ImageDraw.Draw(focus_ring)
+camera_overlay = Image.new('RGBA', SCREEN_SIZE, (255, 0, 0, 0))
+draw = ImageDraw.Draw(camera_overlay)
 draw.ellipse((
     (SCREEN_WIDTH / 2) - 50,
     (SCREEN_HEIGHT / 2) - 50,
     (SCREEN_WIDTH / 2) + 50,
     (SCREEN_HEIGHT / 2) + 50,
 ), outline=(255, 255, 255, 50))
-focus_ring = focus_ring.tobytes()
-focus_ring_overlay = camera.add_overlay(
-    focus_ring,
+draw.rectangle((
+    0, SCREEN_HEIGHT - 60,
+    SCREEN_WIDTH, SCREEN_HEIGHT
+), fill=(0, 0, 0, 100))
+camera_overlay = camera_overlay.tobytes()
+camera_overlay_item = camera.add_overlay(
+    camera_overlay,
     size=SCREEN_SIZE,
     layer=3
 )
@@ -258,8 +261,8 @@ status_overlay = camera.add_overlay(
 )
 last_status_overlay = time.time()
 
-GPIO.setwarnings(False)  # Ignore warning for now
-GPIO.setmode(GPIO.BCM)  # Use physical pin numbering
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
 
 # Trigger
 GPIO.setup(TRIGGER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -318,7 +321,7 @@ try:
                 photocell_hist = medfilt(np.array(photocell_hist), 5).tolist()
 
                 # Second-to-last value in the median-filtered history
-                # is the most 'stable'
+                # is the most 'stable' value we can get
                 photocell_value = photocell_hist[-2]
 
                 logging.debug('Photocell reading: %d', photocell_value)
@@ -331,7 +334,7 @@ try:
                 camera.shutter_speed = shutter_speed
 
                 # Updating the overlay too often causes memory issues with MMAL
-                # as does using the ".update" method offered by picamera's
+                # —as does using the ".update" method offered by picamera's
                 # PiOverlayRenderer class. So, instead, we update every ~3s by
                 # removing and creating a new overlay.
                 if time.time() - last_status_overlay >= 3:
