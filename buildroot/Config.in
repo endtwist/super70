@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_SUPER70_PATH/package/python-picamera/Config.in"

@@ -46,6 +46,8 @@ done
 
 # Set GPU memory
 sed -e "/^gpu_mem_256=/s,=.*,=128," -i "${BINARIES_DIR}/rpi-firmware/config.txt"
+sed -e "/^gpu_mem_512=/s,=.*,=256," -i "${BINARIES_DIR}/rpi-firmware/config.txt"
+sed -e "/^gpu_mem_1024=/s,=.*,=512," -i "${BINARIES_DIR}/rpi-firmware/config.txt"
 
 # Add settings for display
 cat  << __EOF__ >> "${BINARIES_DIR}/rpi-firmware/config.txt"

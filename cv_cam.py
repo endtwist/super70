@@ -34,7 +34,8 @@ camera.start_preview()
 logging.debug('Preview started!')
 
 # Pre-generated de-fisheye OpenCV remap calibration variables
-pkl_file = open('remap.pkl', 'rb')
+dirname = os.path.dirname(os.path.abspath(__file__))
+pkl_file = open(dirname + '/remap.pkl', 'rb')
 remap = pickle.load(pkl_file)
 pkl_file.close()
 
@@ -209,7 +210,7 @@ def draw_overlay(shutter_speed):
     draw = ImageDraw.Draw(overlay)
 
     # shutter_speed is microseconds, we convert to milliseconds for rendering
-    shutter_speed = '%d ms' % round(shutter_speed / 1000)
+    shutter_speed = '%d ms' % round(int(shutter_speed) / 1000)
     textwidth, textheight = draw.textsize(shutter_speed, DEJA_VU_SANS_MONO)
     draw.text(
         (10, SCREEN_HEIGHT - textheight - 10),
@@ -242,8 +243,8 @@ draw.ellipse((
     (SCREEN_HEIGHT / 2) + 50,
 ), outline=(255, 255, 255, 50))
 draw.rectangle((
-    0, SCREEN_HEIGHT - 60,
-    SCREEN_WIDTH, SCREEN_HEIGHT
+    0, 0,
+    SCREEN_WIDTH, 60
 ), fill=(0, 0, 0, 100))
 camera_overlay = camera_overlay.tobytes()
 camera_overlay_item = camera.add_overlay(
@@ -252,7 +253,7 @@ camera_overlay_item = camera.add_overlay(
     layer=3
 )
 
-default_status_overlay = draw_overlay('±0')
+default_status_overlay = draw_overlay(0)
 status_overlay = camera.add_overlay(
     default_status_overlay,
     size=SCREEN_SIZE,

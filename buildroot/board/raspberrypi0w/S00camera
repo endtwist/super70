@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# Start camera...
+#
+
+case "$1" in
+  start)
+	/usr/bin/python3 /etc/cv_cam.py
+  stop)
+	;;
+  restart|reload)
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?
