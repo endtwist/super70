@@ -5,7 +5,7 @@
 
 case "$1" in
   start)
-	/usr/bin/python3 /etc/cv_cam.py
+	/usr/bin/python3 /etc/cv_cam.py &
 	;;
   stop)
 	;;

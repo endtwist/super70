@@ -33,12 +33,6 @@ camera.iso = 150
 camera.start_preview()
 logging.debug('Preview started!')
 
-# Pre-generated de-fisheye OpenCV remap calibration variables
-dirname = os.path.dirname(os.path.abspath(__file__))
-pkl_file = open(dirname + '/remap.pkl', 'rb')
-remap = pickle.load(pkl_file)
-pkl_file.close()
-
 PHOTO_PATH = '/media/sd-sda1/photos'
 UID = os.getuid()
 GID = os.getgid()
@@ -276,6 +270,12 @@ time.sleep(0.1)
 photocell_read_start = time.time()
 GPIO.setup(PHOTOCELL_PIN, GPIO.IN)
 GPIO.add_event_detect(PHOTOCELL_PIN, GPIO.RISING)
+
+# Pre-generated de-fisheye OpenCV remap calibration variables
+dirname = os.path.dirname(os.path.abspath(__file__))
+pkl_file = open(dirname + '/remap.pkl', 'rb')
+remap = pickle.load(pkl_file)
+pkl_file.close()
 
 try:
     # Wait indefinitely until the user terminates the script
