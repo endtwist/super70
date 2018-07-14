@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait console=tty1 logo.nologo
+root=/dev/mmcblk0p2 rootwait console=null logo.nologo quiet
