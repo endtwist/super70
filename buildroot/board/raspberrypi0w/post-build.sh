@@ -5,9 +5,9 @@ set -e
 
 BOARD_DIR="$(dirname $0)"
 
-# Add a console on tty1
+# Remove tty console
 if [ -e ${TARGET_DIR}/etc/inittab ]; then
-	sed -i 's/^.*GENERIC_SERIAL$/tty1::respawn:\/sbin\/getty -L  tty1 0 vt100 # HDMI console/' ${TARGET_DIR}/etc/inittab
+	sed -i 's/^.*GENERIC_SERIAL$//' ${TARGET_DIR}/etc/inittab
 fi
 
 # Add SD card automount

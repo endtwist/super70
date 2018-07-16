@@ -8,10 +8,10 @@ import fnmatch
 import os
 import errno
 import stat
-import pygame
 import logging
 import numpy as np
 import RPi.GPIO as GPIO
+import pygame
 from pygame.locals import KEYDOWN
 from PIL import Image, ImageDraw, ImageFont
 
@@ -66,18 +66,6 @@ file_log.setFormatter(formatter)
 logging.getLogger('').addHandler(file_log)
 
 logging.debug('Camera booting...')
-
-# Fun trick: picamera's preview will actually render *above* pygame meaning
-# we can use both at the same time pretty easily. When we want to show the
-# pygame window (e.g., for post-capture review), we just stop the picamera
-# preview briefly.
-pygame.init()
-
-screen = pygame.display.set_mode(SCREEN_SIZE)
-pygame.mouse.set_visible(False)
-
-# allow the camera to warm up
-time.sleep(0.1)
 
 if not os.path.isdir(PHOTO_PATH):
     try:
@@ -255,6 +243,15 @@ status_overlay = camera.add_overlay(
     rotation=180
 )
 last_status_overlay = time.time()
+
+# Fun trick: picamera's preview will actually render *above* pygame meaning
+# we can use both at the same time pretty easily. When we want to show the
+# pygame window (e.g., for post-capture review), we just stop the picamera
+# preview briefly.
+pygame.init()
+
+screen = pygame.display.set_mode(SCREEN_SIZE)
+pygame.mouse.set_visible(False)
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)

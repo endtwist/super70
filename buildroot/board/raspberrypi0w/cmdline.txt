@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait console=null logo.nologo quiet
+root=/dev/mmcblk0p2 rootwait console=null logo.nologo quiet vt.global_cursor_default=0 vt.cur_default=1 consoleblank=0
