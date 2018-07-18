@@ -130,14 +130,27 @@ def capture_photo():
     camera.stop_preview()
 
     time.sleep(0.1)
-    # grab last frame from videoport?
-    # show 'waiting' state on pygame display
 
     stream = io.BytesIO()
     camera.resolution = PHOTO_SIZE
     camera.rotation = 180
     camera.capture(stream, 'jpeg')
     logging.debug('Photo captured!')
+
+    overlay = Image.new('RGB', SCREEN_SIZE, (0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    waitText = 'Processing...'
+    textwidth, textheight = draw.textsize(waitText, DEJA_VU_SANS_MONO)
+    draw.text(
+        (int((SCREEN_WIDTH - textwidth) / 2), int((SCREEN_HEIGHT - textheight) / 2)),
+        waitText,
+        font=DEJA_VU_SANS_MONO,
+        fill=(255, 255, 255)
+    )
+    wait = pygame.image.fromstring(overlay.tostring(), overlay.size, overlay.mode)
+    screen.blit(wait, (0, 0))
+    pygame.display.update()
 
     data = np.fromstring(stream.getvalue(), dtype=np.uint8)
     image = cv2.imdecode(data, 1)

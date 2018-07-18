@@ -6,9 +6,10 @@
 case "$1" in
   start)
 	# Boot camera
-	/usr/bin/python3 /etc/cv_cam.py
+	/usr/bin/python3 /etc/cv_cam.py &
+	wait
 	# On camera script termination, load a shell
-	/bin/sh
+	/sbin/getty -L  tty1 0 vt100
 	;;
   stop)
 	;;
