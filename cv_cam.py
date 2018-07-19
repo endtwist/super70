@@ -148,7 +148,8 @@ def capture_photo():
         font=DEJA_VU_SANS_MONO,
         fill=(255, 255, 255)
     )
-    wait = pygame.image.fromstring(overlay.tostring(), overlay.size, overlay.mode)
+    overlay = overlay.rotate(180)
+    wait = pygame.image.fromstring(overlay.tobytes(), overlay.size, overlay.mode)
     screen.blit(wait, (0, 0))
     pygame.display.update()
 
