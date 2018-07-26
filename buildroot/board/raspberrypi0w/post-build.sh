@@ -5,10 +5,8 @@ set -e
 
 BOARD_DIR="$(dirname $0)"
 
-# Remove tty console
-if [ -e ${TARGET_DIR}/etc/inittab ]; then
-	sed -i 's/^.*GENERIC_SERIAL$//' ${TARGET_DIR}/etc/inittab
-fi
+# Update inittab
+cp ${BOARD_DIR}/inittab ${TARGET_DIR}/etc/inittab
 
 # Add SD card automount
 cp ${BOARD_DIR}/11-sd-cards-auto-mount.rules ${TARGET_DIR}/etc/udev/rules.d/
