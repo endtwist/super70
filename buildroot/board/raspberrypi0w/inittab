@@ -16,7 +16,12 @@
 # Startup the system
 ::sysinit:/bin/mount -t proc none /proc
 ::sysinit:/bin/mount -t devtmpfs none /dev
-::sysinit:/bin/mount -t tmpfs none /var
+::sysinit:/bin/mount -t tmpfs none /var/log
+::sysinit:/bin/mount -t tmpfs none /var/tmp
+::sysinit:/bin/mount -t tmpfs none /var/run
+::sysinit:/bin/mount -t tmpfs none /var/cache
+::sysinit:/bin/mount -t tmpfs none /media
+::sysinit:/bin/mount -t tmpfs none /mnt
 ::sysinit:/bin/mount -o remount,ro /
 ::sysinit:/bin/mkdir -p /dev/pts
 ::sysinit:/bin/mkdir -p /dev/shm

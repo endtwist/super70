@@ -50,6 +50,19 @@ photocell_hist = []
 photocell_value = 0
 photocell_baseline = 0
 
+if not os.path.isdir(PHOTO_PATH):
+    try:
+        os.makedirs(PHOTO_PATH)
+        # Set new directory ownership to current user, mode to 755
+        os.chown(PHOTO_PATH, UID, GID)
+        os.chmod(PHOTO_PATH,
+                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR |
+                 stat.S_IRGRP | stat.S_IXGRP |
+                 stat.S_IROTH | stat.S_IXOTH)
+    except OSError as e:
+        # errno = 2 if can't create folder
+        print(errno.errorcode[e.errno])
+
 LOG_PATH = '%s/cam.log' % PHOTO_PATH
 try:
     os.remove(LOG_PATH)
@@ -66,20 +79,6 @@ file_log.setFormatter(formatter)
 logging.getLogger('').addHandler(file_log)
 
 logging.debug('Camera booting...')
-
-if not os.path.isdir(PHOTO_PATH):
-    try:
-        os.makedirs(PHOTO_PATH)
-        # Set new directory ownership to current user, mode to 755
-        os.chown(PHOTO_PATH, UID, GID)
-        os.chmod(PHOTO_PATH,
-                 stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR |
-                 stat.S_IRGRP | stat.S_IXGRP |
-                 stat.S_IROTH | stat.S_IXOTH)
-    except OSError as e:
-        # errno = 2 if can't create folder
-        print(errno.errorcode[e.errno])
-
 
 # from https://gist.github.com/bhawkins/3535131
 def medfilt(x, k):
